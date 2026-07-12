@@ -4,12 +4,14 @@ const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const db = require('./db');
+const { generateIdCard } = require('../scripts/id_card_generator');
 
 // Keep track of connection status and QR code
 let connectionStatus = 'Disconnected'; // Disconnected, Connecting, QR_Ready, Connected
 let qrCodeDataUri = null;
 let client = null;
 let wsServer = null; // To broadcast updates
+const BOT_START_TIME = Math.floor(Date.now() / 1000);
 
 // Find local Chrome executable
 function getChromePath() {
@@ -28,6 +30,63 @@ function getChromePath() {
 function setWsServer(server) {
     wsServer = server;
 }
+
+// ─── Language Detection ──────────────────────────────────────────────────────
+// Detects if the user's message is Urdu (native script or Roman Urdu) or English.
+// Returns: 'urdu' | 'english'
+function detectLanguage(text) {
+    if (!text) return 'urdu'; // default to urdu for Pakistani audience
+
+    // Native Urdu/Arabic script characters
+    const urduScriptRegex = /[\u0600-\u06FF\u0750-\u077F]/;
+    if (urduScriptRegex.test(text)) return 'urdu';
+
+    const lower = text.toLowerCase().trim();
+
+    // Common Roman Urdu greetings and words
+    const romanUrduKeywords = [
+        'assalam', 'salam', 'aoa', 'walaikum', 'adab', 'ji', 'haan', 'nahi',
+        'kya', 'kaise', 'mujhe', 'mera', 'meri', 'aap', 'tum', 'hum',
+        'course', 'daakhla', 'admission', 'fee', 'batao', 'bata', 'chahiye',
+        'karna', 'karo', 'karein', 'hai', 'hain', 'tha', 'thi', 'ho',
+        'bhai', 'bhaiya', 'sis', 'yaar', 'dost', 'apna', 'apni',
+        'kitnay', 'kitni', 'kab', 'kahan', 'wahan', 'yahan',
+        'koi', 'bhi', 'aur', 'lekin', 'magar', 'phir', 'ab',
+        'ok', 'theek', 'thik', 'accha', 'achha', 'bilkul'
+    ];
+
+    const wordCount = lower.split(/\s+/).length;
+    let urduHits = 0;
+    for (const kw of romanUrduKeywords) {
+        if (lower.includes(kw)) urduHits++;
+        if (urduHits >= 2) return 'urdu';
+    }
+    // Single strong Roman Urdu hit counts too
+    if (urduHits >= 1 && wordCount <= 3) return 'urdu';
+
+    return 'english';
+}
+
+// ─── Bilingual Greeting ───────────────────────────────────────────────────────
+const GREETINGS_URDU = [
+    "Assalamoalaikum! 🌟 *The Student Space Institute* mein khush aamdeed! Main aap ki kya madad kar sakta hoon? 📚",
+    "Aoa! *The Student Space* mein aap ka swaagat hai! Aaj main aap ki kaise madad kar sakta hoon? ✨",
+    "Salam! 🎓 *The Student Space* se raabta karne ka shukriya! Aap ko kisi cheez mein help chahiye? 🚀",
+    "Walaikumassalam! *The Student Space* mein aap ka dil se swaagat hai! Main kya service day sakta hoon? 🌟"
+];
+
+const GREETINGS_ENGLISH = [
+    "Hello! Welcome to *The Student Space Institute*! How may I assist you today? 📚",
+    "Hi there! Thanks for reaching out to *The Student Space*. How can I help you? ✨",
+    "Welcome to *The Student Space*! 🎓 What would you like to know today? 🚀",
+    "Greetings! We're glad to hear from you at *The Student Space*. How may I assist you? 🌟"
+];
+
+function getGreeting(lang) {
+    const list = lang === 'english' ? GREETINGS_ENGLISH : GREETINGS_URDU;
+    return list[Math.floor(Math.random() * list.length)];
+}
+
 
 // Broadcast helper
 function broadcast(type, data) {
@@ -132,9 +191,16 @@ function buildCoursePrompt() {
     return prompt;
 }
 
-// Admission Fields — now a FUNCTION so course list is always live from DB
 function getAdmissionFields() {
   return [
+    { 
+        key: 'photo', 
+        label: 'Student Photo', 
+        prompt: '📷 Please upload/send your Student Photo (Passport size image):',
+        validate: (val, msg) => {
+            return msg && msg.hasMedia;
+        }
+    },
     { key: 'fullName', label: 'Full Name', prompt: 'Please provide your Full Name:' },
     { key: 'fatherName', label: "Father's Name", prompt: "Please enter your Father's Name:" },
     { 
@@ -244,7 +310,7 @@ function getAdmissionFields() {
             return b.charAt(0).toUpperCase() + b.slice(1);
         }
     },
-    { key: 'preferredDays', label: 'Preferred Days', prompt: 'Please select your Preferred Days (e.g. Sat & Sun, or Mon & Wed):' },
+
     { key: 'reference', label: 'Reference', prompt: 'How did you hear about us? (Facebook, Instagram, Friend, etc.):' },
     { key: 'emergencyName', label: 'Emergency Contact Person', prompt: 'Please enter the name of your Emergency Contact Person:' },
     { key: 'relationship', label: 'Relationship', prompt: 'What is your relationship with the emergency contact?' },
@@ -260,25 +326,101 @@ function getAdmissionFields() {
   ];
 }
 
-const GREETINGS = [
-    "Welcome to The Student Space Institute. How may I assist you today? 📚",
-    "Hello and thank you for contacting The Student Space. How can I help you today? ✨",
-    "Hi there! Welcome to The Student Space. What would you like to know today? 🚀",
-    "Greetings! We're glad to hear from you. How may I assist you today? 🌟"
-];
+function getMenu(lang) {
+    if (lang === 'english') {
+        return `🎓 *THE STUDENT SPACE INSTITUTE*\n━━━━━━━━━━━━━━━━━━━━\nWe're here to guide you! Please choose:\n\n1️⃣ About the Institute\n2️⃣ Courses & Programs\n3️⃣ Start Admission / Enroll Now\n4️⃣ Contact Information\n5️⃣ Fee Details\n\nOr just type your question and I'll answer! 😊`;
+    }
+    return `🎓 *THE STUDENT SPACE INSTITUTE*\n━━━━━━━━━━━━━━━━━━━━\nHum aap ki madad ke liye haazir hain! Kripya choose karein:\n\n1️⃣ Institute ke baare mein\n2️⃣ Courses & Programs\n3️⃣ Admission Shuru Karein / Enroll\n4️⃣ Raabta (Contact) Information\n5️⃣ Fee Details\n\nYa apna sawal type karein, main jawab dunga! 😊`;
+}
 
-function getMenu() {
-    return `🎓 *THE STUDENT SPACE INSTITUTE*
-━━━━━━━━━━━━━━━━━━━━
-We're here to guide you! Please choose:
+function getAboutMenuText() {
+    return `🏛️ *About The Student Space Institute*\n━━━━━━━━━━━━━━━━━\n` +
+           `Aap kis specific cheez ke baare mein jaanna chahte hain? Please choose:\n\n` +
+           `1️⃣ *Introduction*\n` +
+           `2️⃣ *Mission & Vision*\n` +
+           `3️⃣ *Learning Methodology*\n` +
+           `4️⃣ *Campus Facilities*\n` +
+           `5️⃣ *Branch Address & Landmark*\n\n` +
+           `👉 Number type/select karein (e.g. *1* or *2*).\n` +
+           `👉 Reply *0* to return to Main Menu.`;
+}
 
-1️⃣ About the Institute
-2️⃣ Courses & Programs
-3️⃣ Start Admission / Enroll Now
-4️⃣ Contact Information
-5️⃣ Fee Details
+function getCoursesCategoryMenuText() {
+    return `📚 *Courses & Programs — The Student Space*\n━━━━━━━━━━━━━━━━━\n` +
+           `Aap kis category ke courses dekhna chahte hain? Please choose:\n\n` +
+           `1️⃣ *AI & Technology*\n` +
+           `2️⃣ *Career Programs*\n` +
+           `3️⃣ *Academic Coaching*\n` +
+           `4️⃣ *Other Programs*\n\n` +
+           `👉 Number type/select karein (e.g. *1* or *2*).\n` +
+           `👉 Reply *0* to return to Main Menu.`;
+}
 
-Or just type your question and I'll answer! 😊`;
+function getFeesCategoryMenuText() {
+    return `💰 *Fee Structures — The Student Space*\n━━━━━━━━━━━━━━━━━\n` +
+           `Aap kis category ke courses ki fees check karna chahte hain? Please choose:\n\n` +
+           `1️⃣ *AI & Technology Fees*\n` +
+           `2️⃣ *Career Programs Fees*\n` +
+           `3️⃣ *Academic Coaching Fees*\n` +
+           `4️⃣ *Other Programs Fees*\n\n` +
+           `👉 Number type/select karein (e.g. *1* or *2*).\n` +
+           `👉 Reply *0* to return to Main Menu.`;
+}
+
+function getContactMenuText() {
+    return `📬 *Contact Information — The Student Space*\n━━━━━━━━━━━━━━━━━\n` +
+           `Aap ko kaunsi contact details chahiye? Please choose:\n\n` +
+           `1️⃣ *Phone Number*\n` +
+           `2️⃣ *WhatsApp Number*\n` +
+           `3️⃣ *Email Address*\n` +
+           `4️⃣ *Office Address & Landmark*\n` +
+           `5️⃣ *Social Media Links*\n\n` +
+           `👉 Number type/select karein (e.g. *1* or *2*).\n` +
+           `👉 Reply *0* to return to Main Menu.`;
+}
+
+function getCoursesListText(title, list, catIdx) {
+    let msg = `🤖 *${title}*\n━━━━━━━━━━━━━━━━━\n\n`;
+    list.forEach((c, idx) => {
+        msg += `${idx + 1}️⃣ *${c.name}*\n`;
+    });
+    msg += `\n👉 Option number type karein (e.g. *1* or *2*) to get course details.\n` +
+           `👉 Reply *2* to go back to Courses categories.\n` +
+           `👉 Reply *0* to return to Main Menu.`;
+    return msg;
+}
+
+function getFeesListText(title, list, catIdx) {
+    let msg = `💰 *${title}*\n━━━━━━━━━━━━━━━━━\n\n`;
+    list.forEach((c, idx) => {
+        msg += `${idx + 1}️⃣ *${c.name}*\n`;
+    });
+    msg += `\n👉 Option number type karein (e.g. *1* or *2*) to see course fees.\n` +
+           `👉 Reply *5* to go back to Fee categories.\n` +
+           `👉 Reply *0* to return to Main Menu.`;
+    return msg;
+}
+
+function getCourseDetailText(c, catIdx) {
+    return `📚 *${c.name}*\n━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+           `📖 *Description:* ${c.description}\n\n` +
+           `⏱️ *Duration:* ${c.duration}\n` +
+           `💰 *Total Fee:* ${c.fee}\n` +
+           `💳 *Installment:* ${c.installment}\n` +
+           `📅 *Schedule:* ${c.schedule}\n` +
+           `💼 *Career Opportunities:* ${c.careerOpportunities}\n\n` +
+           `👉 Reply *2* to go back to this category's list.\n` +
+           `👉 Reply *3* or *Apply* to Enroll in this course.\n` +
+           `👉 Reply *0* to return to the Main Menu.`;
+}
+
+function getFeeDetailText(c, catIdx) {
+    return `💰 *${c.name} — Fee Structure*\n━━━━━━━━━━━━━━━━━\n\n` +
+           `💵 *Total Course Fee:* ${c.fee}\n` +
+           `💳 *Monthly Installment:* ${c.installment}\n` +
+           `⏱️ *Duration:* ${c.duration}\n\n` +
+           `👉 Reply *5* to go back to this category's fees.\n` +
+           `👉 Reply *0* to return to Main Menu.`;
 }
 
 // Call Gemini API directly (HTTP call to avoid Node dependencies)
@@ -292,40 +434,28 @@ async function getAIResponse(userMessage, chatHistory = [], activeState = null) 
     const courses = db.getCourses();
     const coursesText = courses.map(c => `* ${c.name}: Duration: ${c.duration}, Fee: ${c.fee} (${c.installment}), Schedule: ${c.schedule}, Opportunities: ${c.careerOpportunities}, Description: ${c.description}`).join('\n');
 
-    const systemPrompt = `You are a professional human admission officer, counselor, receptionist, and student support representative for "The Student Space Institute".
-Personality: Always respond in a friendly, professional, and human-like manner. Never sound robotic. Use conversational English.
-Keep responses short and engaging unless detailed information is requested. Guide users politely.
+    const settings = db.getSettings();
+    let promptBase = settings.agentSystemPrompt || '';
 
-Knowledge Base:
-- Intro: The Student Space Institute is a premier training academy providing market-driven skill training in IT, design, and marketing.
-- Mission: Empowering young minds for tomorrow by building strong concepts for a bright future.
-- Vision: Learn, Grow, Succeed. To be a leading educational hub that bridges the skill gap.
-- Methodology: Hands-on project-based learning, individual mentorship, active weekly assessments, and industry-standard portfolio building.
-- Facilities: State-of-the-art computer lab, high-speed Wi-Fi, air-conditioned classes, student discussion lounge, and online backup recordings.
-- Support: Lifetime career support, internship opportunities for top graduates, resume building, and freelancing training.
-- Address: W-003 Ground Floor, Haroon Royal City Phase 3, Block 17, Gulistan-e-Johar, Karachi.
-- Phone & WhatsApp: 0322 1761566.
-- Email: info@thestudentspace.com.
-- Landmark: Near Federal Urdu University / Continental Bakery.
-- Google Maps: https://maps.google.com/?q=The+Student+Space+Gulistan-e-Johar+Karachi
+    if (promptBase.includes('{{coursesText}}')) {
+        promptBase = promptBase.replace('{{coursesText}}', coursesText);
+    } else if (promptBase.includes('{{courses}}')) {
+        promptBase = promptBase.replace('{{courses}}', coursesText);
+    } else {
+        promptBase += `\n\nAvailable Programs:\n${coursesText}`;
+    }
 
-Available Programs:
-${coursesText}
+    if (settings.agentRules && settings.agentRules.length > 0) {
+        const rulesText = settings.agentRules.map(r => `- Keyword/Intent: "${r.keyword}" -> Response: "${r.response}"`).join('\n');
+        promptBase += `\n\nCustom FAQ/QA Rules to follow:\n${rulesText}`;
+    }
 
-Rules:
-1. If the user asks for contact details, NEVER reveal all contact details at once. Instead ask:
-"Which contact information would you like?
-1️⃣ Phone Number
-2️⃣ WhatsApp Number
-3️⃣ Email Address
-4️⃣ Office Address
-5️⃣ Social Media Links"
-Then provide only the selected one when they reply.
-2. If the user asks about fees: Show available programs first and ask: "Which course are you interested in?" to provide specific fee details.
-3. If they ask about unrelated topics (e.g., weather, cooking, general knowledge): Respond: "I specialize in assisting with The Student Space Institute services. Please ask me anything related to admissions, courses, coaching programs, fees, or institute information."
-4. If they ask for human support or "Talk to Admission Team": Ask for their name and contact number so we can connect them.
+    // Language instruction — always respond in the user's preferred language
+    const langInstruction = activeState && activeState.language === 'english'
+        ? `\n\nIMPORTANT: This user communicates in ENGLISH. Always respond in clear, professional English only.`
+        : `\n\nIMPORTANT: Is user ka pehla message Urdu ya Roman Urdu mein tha. Hamesha Roman Urdu ya pure Urdu mein jawab dein. Agar user English mein likhay to bhi Roman Urdu mein jawab dein jab tak woh explicitly English mein jawab mangein. Pakistani style Roman Urdu use karein.`;
 
-Current Time: ${new Date().toISOString()}`;
+    const systemPrompt = `${promptBase}${langInstruction}\n\nIMPORTANT: When the user asks about a course or mentions a course name (e.g., "3D Animation", "Generative AI", etc.), you MUST explicitly show its details, especially the Schedule, Timings, and Days from the database.\n\nCurrent Time: ${new Date().toISOString()}`;
 
     // Structure contents
     const contents = [];
@@ -361,7 +491,7 @@ Current Time: ${new Date().toISOString()}`;
             body: JSON.stringify(body)
         });
         const json = await response.json();
-        if (json.candidates && json.candidates[0] && json.candidates[0].content) {
+        if (json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts && json.candidates[0].content.parts[0]) {
             return json.candidates[0].content.parts[0].text.trim();
         } else {
             console.error("Gemini Error:", json);
@@ -433,8 +563,9 @@ function initWhatsApp() {
                 '--disable-dev-shm-usage',
                 '--disable-accelerated-2d-canvas',
                 '--no-first-run',
-                '--no-zygote',
-                '--single-process'
+                '--disable-gpu',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--disable-site-isolation-trials'
             ]
         }
     });
@@ -473,6 +604,12 @@ function initWhatsApp() {
 
     client.on('message', async (message) => {
         try {
+            // Ignore messages that were sent before the bot started
+            if (message.timestamp < BOT_START_TIME) {
+                console.log(`Ignoring old message from ${message.from}`);
+                return;
+            }
+
             const phone = message.from;
             const text = message.body;
             const name = message._data.notifyName || phone;
@@ -491,6 +628,14 @@ function initWhatsApp() {
             const activeStep = conv ? conv.activeStep : -1;
             const collectedData = conv ? conv.collectedData : {};
 
+            // ── Detect & persist language on FIRST message ──────────────
+            let userLang = conv ? (conv.language || null) : null;
+            if (!userLang) {
+                userLang = detectLanguage(text);
+                db.updateConversationStatus(phone, { language: userLang });
+                console.log(`Detected language for ${phone}: ${userLang}`);
+            }
+
             // Save user message in DB
             db.saveMessage(phone, name, { sender: 'student', text, intent });
             broadcast('message', { phone, name, message: { sender: 'student', text, timestamp: new Date().toISOString() } });
@@ -507,15 +652,37 @@ function initWhatsApp() {
                 
                 // Validate if field has a custom validator
                 if (currentField.validate) {
-                    isValid = currentField.validate(text);
+                    isValid = currentField.validate(text, message);
                 } else {
                     isValid = text.trim().length > 0;
                 }
 
                 if (isValid) {
                     // Save field
-                    const formattedValue = currentField.format ? currentField.format(text) : text.trim();
-                    collectedData[currentField.key] = formattedValue;
+                    let formattedValue = currentField.format ? currentField.format(text, message) : text.trim();
+                    
+                    if (currentField.key === 'photo') {
+                        try {
+                            const media = await message.downloadMedia();
+                            if (media && media.mimetype.startsWith('image/')) {
+                                const ext = media.mimetype.split('/')[1]?.split(';')[0] || 'jpeg';
+                                const filename = `photo_${Date.now()}.${ext}`;
+                                const photosDir = path.join(__dirname, '..', 'data', 'photos');
+                                if (!fs.existsSync(photosDir)) fs.mkdirSync(photosDir, { recursive: true });
+                                const photoPath = path.join(photosDir, filename);
+                                fs.writeFileSync(photoPath, media.data, 'base64');
+                                formattedValue = `/data/photos/${filename}`;
+                            } else {
+                                isValid = false;
+                            }
+                        } catch (mediaErr) {
+                            console.error("Failed to download media:", mediaErr);
+                            isValid = false;
+                        }
+                    }
+
+                    if (isValid) {
+                        collectedData[currentField.key] = formattedValue;
                     
                     const nextStep = activeStep + 1;
                     
@@ -525,7 +692,18 @@ function initWhatsApp() {
                             activeStep: nextStep,
                             collectedData
                         });
-                        replyText = `✅ Saved ${currentField.label}.\n\n👉 ${FIELDS[nextStep].prompt}`;
+                        
+                        let courseDetails = '';
+                        if (currentField.key === 'course') {
+                            const coursesList = db.getCourses();
+                            const matched = coursesList.find(c => c.name.toLowerCase() === formattedValue.toLowerCase());
+                            if (matched) {
+                                const daysOnly = (matched.schedule || '').replace(/\(.*?\)/g, '').trim();
+                                courseDetails = `📅 *${matched.name}* Details:\n⏱️ *Duration:* ${matched.duration}\n📅 *Days:* ${daysOnly}\n\n`;
+                            }
+                        }
+                        
+                        replyText = `✅ Saved ${currentField.label}.\n\n${courseDetails}👉 ${FIELDS[nextStep].prompt}`;
                     } else {
                         // All fields collected!
                         db.updateConversationStatus(phone, {
@@ -536,6 +714,7 @@ function initWhatsApp() {
                         replyText = `🎉 Thank you! We have collected all your details and are now generating your Official TSS Student Registration Form. Please wait a moment...`;
                         triggerFormGen = true;
                     }
+                    }
                 } else {
                     // Invalid, ask again politely
                     replyText = `❌ Invalid input for *${currentField.label}*.\n\n👉 ${currentField.prompt}`;
@@ -544,248 +723,372 @@ function initWhatsApp() {
             } else {
                 // Not in active collection mode. Handle intents or natural queries.
                 
-                // Check for admission trigger words
                 const lowerText = text.trim().toLowerCase();
-                const triggerWords = ["i want admission", "register me", "enroll me", "apply now", "admission", "3"];
-                
-                // Exact menu selection for "3" or words matching admission
-                const isAdmissionTrigger = triggerWords.includes(lowerText) || 
-                                          (lowerText.length === 1 && lowerText === '3') || 
-                                          (lowerText.startsWith("apply") || lowerText.includes("enroll"));
 
-                if (isAdmissionTrigger) {
-                    // Start admission workflow
+                // ── Helper: set context and return menu string ──────────────
+                const setCtx = (ctx) => db.updateConversationStatus(phone, { menuContext: ctx });
+                const menuCtx = conv ? (conv.menuContext || 'main') : 'main';
+
+                // ── 0 / reset keywords → always go to main menu ─────────────
+                if (lowerText === '0' || ['menu', 'help', 'hi', 'hello', 'start', 'salam', 'السلام', 'assalam', 'hey'].some(w => lowerText.includes(w))) {
+                    setCtx('main');
+                    const greeting = getGreeting(userLang);
+                    replyText = `${greeting}\n\n${getMenu(userLang)}`;
+
+                // ── Context-aware bare number input ─────────────────────────
+                } else if (/^\d+$/.test(lowerText)) {
+                    const num = parseInt(lowerText, 10);
+
+                    /* ── ABOUT context ── */
+                    if (menuCtx === 'about') {
+                        if (num === 1) {
+                            setCtx('about');
+                            replyText = `🏛️ *Introduction — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
+                                        `The Student Space is a premier skill training academy offering professional hands-on coaching in IT, AI, design, marketing & academic programs.\n\n` +
+                                        `👉 Reply *1* for About options.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else if (num === 2) {
+                            setCtx('about');
+                            replyText = `🎯 *Mission & Vision — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
+                                        `*Mission:* Empowering young minds for tomorrow by building strong, market-ready conceptual foundations.\n\n` +
+                                        `*Vision:* Learn • Grow • Succeed — bridging the skill gap between education and industry.\n\n` +
+                                        `👉 Reply *1* for About options.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else if (num === 3) {
+                            setCtx('about');
+                            replyText = `📖 *Learning Methodology*\n━━━━━━━━━━━━━━━━━\n\n` +
+                                        `• Project-based learning with live hands-on practice.\n` +
+                                        `• Individual mentorship and personalized guidance.\n` +
+                                        `• Active weekly assessments to track progress.\n` +
+                                        `• Professional portfolio building.\n` +
+                                        `• Lifetime career support & internship opportunities.\n\n` +
+                                        `👉 Reply *1* for About options.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else if (num === 4) {
+                            setCtx('about');
+                            replyText = `💻 *Campus Facilities — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
+                                        `• State-of-the-art computer lab with modern systems.\n` +
+                                        `• High-speed Wi-Fi internet access.\n` +
+                                        `• Fully air-conditioned classrooms.\n` +
+                                        `• Student discussion lounge.\n` +
+                                        `• Online recorded backup sessions of all classes.\n\n` +
+                                        `👉 Reply *1* for About options.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else if (num === 5) {
+                            setCtx('about');
+                            replyText = `📍 *Branch Location & Address*\n━━━━━━━━━━━━━━━━━\n\n` +
+                                        `*Office Address:* W-003, Ground Floor, Haroon Royal City Phase 3, Block 17, Gulistan-e-Johar, Karachi.\n\n` +
+                                        `*Landmark:* Near Federal Urdu University / Continental Bakery.\n\n` +
+                                        `🗺️ *Google Maps:* https://maps.google.com/?q=The+Student+Space+Gulistan-e-Johar+Karachi\n\n` +
+                                        `👉 Reply *1* for About options.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else {
+                            replyText = `❓ Please choose a valid option (1–5) or reply *0* for Main Menu.`;
+                        }
+
+                    /* ── COURSES category menu context ── */
+                    } else if (menuCtx === 'courses') {
+                        const { aiTech, career, academic, other } = getGroupedCourses();
+                        let list = null, ctxKey = '', title = '', icon = '';
+                        if (num === 1) { list = aiTech; ctxKey = 'courses-ai'; title = 'AI & Technology Courses'; icon = '🤖'; }
+                        else if (num === 2) { list = career; ctxKey = 'courses-career'; title = 'Career Programs'; icon = '🚀'; }
+                        else if (num === 3) { list = academic; ctxKey = 'courses-academic'; title = 'Academic Coaching Programs'; icon = '📚'; }
+                        else if (num === 4) { list = other; ctxKey = 'courses-other'; title = 'Other Programs'; icon = '📖'; }
+
+                        if (list) {
+                            setCtx(ctxKey);
+                            let msg = `${icon} *${title}*\n━━━━━━━━━━━━━━━━━\n\n`;
+                            list.forEach((c, idx) => { msg += `${idx + 1}️⃣ *${c.name}*\n`; });
+                            msg += `\n👉 Number type karein course details ke liye.\n` +
+                                   `👉 Reply *back* for Courses categories.\n` +
+                                   `👉 Reply *0* to return to Main Menu.`;
+                            replyText = msg;
+                        } else {
+                            replyText = `❓ Please choose a valid option (1–4) or reply *0* for Main Menu.`;
+                        }
+
+                    /* ── COURSES item detail context ── */
+                    } else if (['courses-ai', 'courses-career', 'courses-academic', 'courses-other'].includes(menuCtx)) {
+                        const { aiTech, career, academic, other } = getGroupedCourses();
+                        let list = [];
+                        let catLabel = '';
+                        if (menuCtx === 'courses-ai') { list = aiTech; catLabel = 'AI & Technology'; }
+                        else if (menuCtx === 'courses-career') { list = career; catLabel = 'Career Programs'; }
+                        else if (menuCtx === 'courses-academic') { list = academic; catLabel = 'Academic Coaching'; }
+                        else if (menuCtx === 'courses-other') { list = other; catLabel = 'Other Programs'; }
+
+                        const idx = num - 1;
+                        if (idx >= 0 && idx < list.length) {
+                            const c = list[idx];
+                            // Strip clock time from schedule — only show days/dates
+                            const schedDaysOnly = (c.schedule || '').replace(/\(.*?\)/g, '').trim();
+                            // Auto-start enrollment with course pre-filled
+                            db.updateConversationStatus(phone, {
+                                registrationStatus: 'Active',
+                                activeStep: 1, // skip photo step, start from fullName (step 1) — photo step is step 0
+                                collectedData: { course: c.name },
+                                menuContext: 'main'
+                            });
+                            const ENROLL_FIELDS = getAdmissionFields();
+                            replyText = `📚 *${c.name}*\n━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                        `📖 *Description:* ${c.description}\n\n` +
+                                        `⏱️ *Duration:* ${c.duration}\n` +
+                                        `💰 *Total Fee:* ${c.fee}\n` +
+                                        `💳 *Monthly Installment:* ${c.installment}\n` +
+                                        `📅 *Days:* ${schedDaysOnly}\n` +
+                                        `💼 *Career Opportunities:* ${c.careerOpportunities}\n\n` +
+                                        `✅ *Aap ka course select ho gaya!*\n\n` +
+                                        `📝 Ab registration shuru karte hain...\n\n` +
+                                        `👉 ${ENROLL_FIELDS[0].prompt}`;
+                        } else {
+                            replyText = `❓ Please choose a valid option (1–${list.length}) or reply *0* for Main Menu.`;
+                        }
+
+                    /* ── CONTACT context ── */
+                    } else if (menuCtx === 'contact') {
+                        if (num === 1) {
+                            setCtx('contact');
+                            replyText = `📞 *Phone Number — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
+                                        `Aap humein is number par call kar sakte hain:\n` +
+                                        `👉 *0322 1761566*\n\n` +
+                                        `👉 Reply *4* for other Contact options.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else if (num === 2) {
+                            setCtx('contact');
+                            replyText = `💬 *WhatsApp — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
+                                        `Aap is official WhatsApp chat par message kar sakte hain:\n` +
+                                        `👉 *0322 1761566*\n\n` +
+                                        `👉 Reply *4* for other Contact options.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else if (num === 3) {
+                            setCtx('contact');
+                            replyText = `✉️ *Email Address — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
+                                        `Aap humein email send kar sakte hain:\n` +
+                                        `👉 *info@thestudentspace.com*\n\n` +
+                                        `👉 Reply *4* for other Contact options.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else if (num === 4) {
+                            setCtx('contact');
+                            replyText = `📍 *Office Address — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
+                                        `*Address:* W-003, Ground Floor, Haroon Royal City Phase 3, Block 17, Gulistan-e-Johar, Karachi.\n\n` +
+                                        `*Landmark:* Near Federal Urdu University / Continental Bakery.\n` +
+                                        `🗺️ *Google Maps:* https://maps.google.com/?q=The+Student+Space+Gulistan-e-Johar+Karachi\n\n` +
+                                        `👉 Reply *4* for other Contact options.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else if (num === 5) {
+                            setCtx('contact');
+                            replyText = `🌐 *Social Media Links — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
+                                        `Humare social channels follow/visit karein:\n` +
+                                        `• *Facebook:* https://facebook.com/thestudentspace\n` +
+                                        `• *Instagram:* https://instagram.com/thestudentspace\n` +
+                                        `• *LinkedIn:* https://linkedin.com/company/thestudentspace\n\n` +
+                                        `👉 Reply *4* for other Contact options.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else {
+                            replyText = `❓ Please choose a valid option (1–5) or reply *0* for Main Menu.`;
+                        }
+
+                    /* ── FEES category menu context ── */
+                    } else if (menuCtx === 'fees') {
+                        const { aiTech, career, academic, other } = getGroupedCourses();
+                        let list = null, ctxKey = '', title = '', icon = '';
+                        if (num === 1) { list = aiTech; ctxKey = 'fees-ai'; title = 'AI & Technology — Fee Structure'; icon = '💰'; }
+                        else if (num === 2) { list = career; ctxKey = 'fees-career'; title = 'Career Programs — Fee Structure'; icon = '🚀'; }
+                        else if (num === 3) { list = academic; ctxKey = 'fees-academic'; title = 'Academic Coaching — Fee Structure'; icon = '📚'; }
+                        else if (num === 4) { list = other; ctxKey = 'fees-other'; title = 'Other Programs — Fee Structure'; icon = '📖'; }
+
+                        if (list) {
+                            setCtx(ctxKey);
+                            let msg = `${icon} *${title}*\n━━━━━━━━━━━━━━━━━\n\n`;
+                            list.forEach((c, idx) => { msg += `${idx + 1}️⃣ *${c.name}*\n`; });
+                            msg += `\n👉 Number type karein us course ki fee dekhne ke liye.\n` +
+                                   `👉 Reply *back* for Fee categories.\n` +
+                                   `👉 Reply *0* to return to Main Menu.`;
+                            replyText = msg;
+                        } else {
+                            replyText = `❓ Please choose a valid option (1–4) or reply *0* for Main Menu.`;
+                        }
+
+                    /* ── FEES item detail context ── */
+                    } else if (['fees-ai', 'fees-career', 'fees-academic', 'fees-other'].includes(menuCtx)) {
+                        const { aiTech, career, academic, other } = getGroupedCourses();
+                        let list = [];
+                        let catLabel = '';
+                        if (menuCtx === 'fees-ai') { list = aiTech; catLabel = 'AI & Technology'; }
+                        else if (menuCtx === 'fees-career') { list = career; catLabel = 'Career Programs'; }
+                        else if (menuCtx === 'fees-academic') { list = academic; catLabel = 'Academic Coaching'; }
+                        else if (menuCtx === 'fees-other') { list = other; catLabel = 'Other Programs'; }
+
+                        const idx = num - 1;
+                        if (idx >= 0 && idx < list.length) {
+                            const c = list[idx];
+                            setCtx(menuCtx);
+                            replyText = `💰 *${c.name} — Fee Structure*\n━━━━━━━━━━━━━━━━━\n\n` +
+                                        `💵 *Total Course Fee:* ${c.fee}\n` +
+                                        `💳 *Monthly Installment:* ${c.installment}\n` +
+                                        `⏱️ *Duration:* ${c.duration}\n\n` +
+                                        `👉 Reply *back* to ${catLabel} fee list.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else {
+                            replyText = `❓ Please choose a valid option (1–${list.length}) or reply *0* for Main Menu.`;
+                        }
+
+                    /* ── MAIN MENU bare number ── */
+                    } else {
+                        // Main menu number selection
+                        if (num === 1) {
+                            setCtx('about');
+                            replyText = `🏛️ *About The Student Space Institute*\n━━━━━━━━━━━━━━━━━\n` +
+                                        `Aap kis specific cheez ke baare mein jaanna chahte hain?\n\n` +
+                                        `1️⃣ *Introduction*\n` +
+                                        `2️⃣ *Mission & Vision*\n` +
+                                        `3️⃣ *Learning Methodology*\n` +
+                                        `4️⃣ *Campus Facilities*\n` +
+                                        `5️⃣ *Branch Address & Landmark*\n\n` +
+                                        `👉 Number type karein.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else if (num === 2) {
+                            setCtx('courses');
+                            replyText = `📚 *Courses & Programs — The Student Space*\n━━━━━━━━━━━━━━━━━\n` +
+                                        `Aap kis category ke courses dekhna chahte hain?\n\n` +
+                                        `1️⃣ *AI & Technology*\n` +
+                                        `2️⃣ *Career Programs*\n` +
+                                        `3️⃣ *Academic Coaching*\n` +
+                                        `4️⃣ *Other Programs*\n\n` +
+                                        `👉 Number type karein.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else if (num === 3) {
+                            setCtx('main');
+                            db.updateConversationStatus(phone, {
+                                registrationStatus: 'Active',
+                                activeStep: 0,
+                                collectedData: {},
+                                menuContext: 'main'
+                            });
+                            replyText = `📝 *TSS Admission Registration Process*\n\nMain aap ko step-by-step registration form fill karwaunga. Har sawaal ka jawab dhyan se dein.\n\n👉 ${getAdmissionFields()[0].prompt}`;
+                        } else if (num === 4) {
+                            setCtx('contact');
+                            replyText = `📬 *Contact Information — The Student Space*\n━━━━━━━━━━━━━━━━━\n` +
+                                        `Aap ko kaunsi contact details chahiye?\n\n` +
+                                        `1️⃣ *Phone Number*\n` +
+                                        `2️⃣ *WhatsApp Number*\n` +
+                                        `3️⃣ *Email Address*\n` +
+                                        `4️⃣ *Office Address & Landmark*\n` +
+                                        `5️⃣ *Social Media Links*\n\n` +
+                                        `👉 Number type karein.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else if (num === 5) {
+                            setCtx('fees');
+                            replyText = `💰 *Fee Structures — The Student Space*\n━━━━━━━━━━━━━━━━━\n` +
+                                        `Aap kis category ke courses ki fees check karna chahte hain?\n\n` +
+                                        `1️⃣ *AI & Technology Fees*\n` +
+                                        `2️⃣ *Career Programs Fees*\n` +
+                                        `3️⃣ *Academic Coaching Fees*\n` +
+                                        `4️⃣ *Other Programs Fees*\n\n` +
+                                        `👉 Number type karein.\n` +
+                                        `👉 Reply *0* to return to Main Menu.`;
+                        } else {
+                            // AI fallback for unknown numbers
+                            replyText = await getAIResponse(text, chatHistory, conv);
+                        }
+                    }
+
+                // ── "back" keyword → go up one level ────────────────────────
+                } else if (lowerText === 'back') {
+                    if (menuCtx === 'about') {
+                        setCtx('main');
+                        replyText = getMenu();
+                    } else if (menuCtx === 'courses') {
+                        setCtx('main');
+                        replyText = getMenu();
+                    } else if (['courses-ai', 'courses-career', 'courses-academic', 'courses-other'].includes(menuCtx)) {
+                        setCtx('courses');
+                        replyText = `📚 *Courses & Programs — The Student Space*\n━━━━━━━━━━━━━━━━━\n` +
+                                    `Aap kis category ke courses dekhna chahte hain?\n\n` +
+                                    `1️⃣ *AI & Technology*\n` +
+                                    `2️⃣ *Career Programs*\n` +
+                                    `3️⃣ *Academic Coaching*\n` +
+                                    `4️⃣ *Other Programs*\n\n` +
+                                    `👉 Number type karein.\n` +
+                                    `👉 Reply *0* to return to Main Menu.`;
+                    } else if (menuCtx === 'contact') {
+                        setCtx('main');
+                        replyText = getMenu();
+                    } else if (menuCtx === 'fees') {
+                        setCtx('main');
+                        replyText = getMenu();
+                    } else if (['fees-ai', 'fees-career', 'fees-academic', 'fees-other'].includes(menuCtx)) {
+                        setCtx('fees');
+                        replyText = `💰 *Fee Structures — The Student Space*\n━━━━━━━━━━━━━━━━━\n` +
+                                    `Aap kis category ke courses ki fees check karna chahte hain?\n\n` +
+                                    `1️⃣ *AI & Technology Fees*\n` +
+                                    `2️⃣ *Career Programs Fees*\n` +
+                                    `3️⃣ *Academic Coaching Fees*\n` +
+                                    `4️⃣ *Other Programs Fees*\n\n` +
+                                    `👉 Number type karein.\n` +
+                                    `👉 Reply *0* to return to Main Menu.`;
+                    } else {
+                        setCtx('main');
+                        replyText = getMenu();
+                    }
+
+                // ── enroll shortcut ─────────────────────────────────────────
+                } else if (lowerText === 'enroll' || lowerText === 'apply' || lowerText === 'i want admission' || lowerText === 'register me' || lowerText === 'enroll me' || lowerText === 'apply now' || lowerText === 'admission') {
+                    setCtx('main');
                     db.updateConversationStatus(phone, {
                         registrationStatus: 'Active',
                         activeStep: 0,
-                        collectedData: {}
+                        collectedData: {},
+                        menuContext: 'main'
                     });
                     replyText = `📝 *TSS Admission Registration Process*\n\nMain aap ko step-by-step registration form fill karwaunga. Har sawaal ka jawab dhyan se dein.\n\n👉 ${getAdmissionFields()[0].prompt}`;
-                } else if (['menu', 'help', 'hi', 'hello', 'start', 'salam', 'السلام', 'assalam', 'hey'].some(w => lowerText.includes(w)) || lowerText === '0') {
-                    // Send greeting + Menu
-                    const greeting = GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
-                    replyText = `${greeting}\n\n${getMenu()}`;
 
-                } else if (lowerText === '1' || lowerText === 'about' || lowerText === 'about us' || lowerText === 'institute') {
-                    // About Institute - Short Menu with options
+                // ── keyword-based navigation (words instead of numbers) ─────
+                } else if (lowerText === 'about' || lowerText === 'about us' || lowerText === 'institute') {
+                    setCtx('about');
                     replyText = `🏛️ *About The Student Space Institute*\n━━━━━━━━━━━━━━━━━\n` +
-                                `Aap kis specific cheez ke baare mein jaanna chahte hain? Please choose:\n\n` +
-                                `1️⃣ *Introduction* (Type *1.1*)\n` +
-                                `2️⃣ *Mission & Vision* (Type *1.2*)\n` +
-                                `3️⃣ *Learning Methodology* (Type *1.3*)\n` +
-                                `4️⃣ *Campus Facilities* (Type *1.4*)\n` +
-                                `5️⃣ *Branch Address & Landmark* (Type *1.5*)\n\n` +
-                                `👉 Option type karein (e.g. *1.1* or *Introduction*).\n` +
+                                `Aap kis specific cheez ke baare mein jaanna chahte hain?\n\n` +
+                                `1️⃣ *Introduction*\n` +
+                                `2️⃣ *Mission & Vision*\n` +
+                                `3️⃣ *Learning Methodology*\n` +
+                                `4️⃣ *Campus Facilities*\n` +
+                                `5️⃣ *Branch Address & Landmark*\n\n` +
+                                `👉 Number type karein.\n` +
                                 `👉 Reply *0* to return to Main Menu.`;
-
-                } else if (lowerText === '1.1' || lowerText === '11' || lowerText.includes('introduction') || lowerText === 'intro') {
-                    // Intro details
-                    replyText = `🏛️ *Introduction — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
-                                `The Student Space is a premier skill training academy offering professional hands-on coaching in IT, AI, design, marketing & academic programs.\n\n` +
-                                `👉 Reply *1* for About options.\n` +
-                                `👉 Reply *0* to return to Main Menu.`;
-
-                } else if (lowerText === '1.2' || lowerText === '12' || lowerText.includes('mission') || lowerText.includes('vision')) {
-                    // Mission details
-                    replyText = `🎯 *Mission & Vision — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
-                                `*Mission:* Empowering young minds for tomorrow by building strong, market-ready conceptual foundations.\n\n` +
-                                `*Vision:* Learn • Grow • Succeed — bridging the skill gap between education and industry.\n\n` +
-                                `👉 Reply *1* for About options.\n` +
-                                `👉 Reply *0* to return to Main Menu.`;
-
-                } else if (lowerText === '1.3' || lowerText === '13' || lowerText.includes('methodology') || lowerText.includes('learning')) {
-                    // Learning Methodology
-                    replyText = `📖 *Learning Methodology*\n━━━━━━━━━━━━━━━━━\n\n` +
-                                `• Project-based learning with live hands-on practice.\n` +
-                                `• Individual mentorship and personalized guidance.\n` +
-                                `• Active weekly assessments to track progress.\n` +
-                                `• Professional portfolio building.\n` +
-                                `• Lifetime career support & internship opportunities.\n\n` +
-                                `👉 Reply *1* for About options.\n` +
-                                `👉 Reply *0* to return to Main Menu.`;
-
-                } else if (lowerText === '1.4' || lowerText === '14' || lowerText.includes('facilities') || lowerText.includes('lab') || lowerText.includes('wifi')) {
-                    // Facilities details
-                    replyText = `💻 *Campus Facilities — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
-                                `• State-of-the-art computer lab with modern systems.\n` +
-                                `• High-speed Wi-Fi internet access.\n` +
-                                `• Fully air-conditioned classrooms.\n` +
-                                `• Student discussion lounge.\n` +
-                                `• Online recorded backup sessions of all classes.\n\n` +
-                                `👉 Reply *1* for About options.\n` +
-                                `👉 Reply *0* to return to Main Menu.`;
-
-                } else if (lowerText === '1.5' || lowerText === '15' || lowerText.includes('address') || lowerText.includes('location') || lowerText.includes('landmark')) {
-                    // Location details
-                    replyText = `📍 *Branch Location & Address*\n━━━━━━━━━━━━━━━━━\n\n` +
-                                `*Office Address:* W-003, Ground Floor, Haroon Royal City Phase 3, Block 17, Gulistan-e-Johar, Karachi.\n\n` +
-                                `*Landmark:* Near Federal Urdu University / Continental Bakery.\n\n` +
-                                `🗺️ *Google Maps:* https://maps.google.com/?q=The+Student+Space+Gulistan-e-Johar+Karachi\n\n` +
-                                `👉 Reply *1* for About options.\n` +
-                                `👉 Reply *0* to return to Main Menu.`;
-
-                } else if (lowerText === '2' || lowerText === 'courses' || lowerText === 'programs' || lowerText === 'course' || lowerText === 'program') {
-                    // Courses Sub-menu
+                } else if (lowerText === 'courses' || lowerText === 'programs' || lowerText === 'course' || lowerText === 'program') {
+                    setCtx('courses');
                     replyText = `📚 *Courses & Programs — The Student Space*\n━━━━━━━━━━━━━━━━━\n` +
-                                `Aap kis category ke courses dekhna chahte hain? Please choose:\n\n` +
-                                `1️⃣ *AI & Technology* (Type *2.1*)\n` +
-                                `2️⃣ *Career Programs* (Type *2.2*)\n` +
-                                `3️⃣ *Academic Coaching* (Type *2.3*)\n` +
-                                `4️⃣ *Other Programs* (Type *2.4*)\n\n` +
-                                `👉 Option type karein (e.g. *2.1* or *AI*).\n` +
+                                `Aap kis category ke courses dekhna chahte hain?\n\n` +
+                                `1️⃣ *AI & Technology*\n` +
+                                `2️⃣ *Career Programs*\n` +
+                                `3️⃣ *Academic Coaching*\n` +
+                                `4️⃣ *Other Programs*\n\n` +
+                                `👉 Number type karein.\n` +
                                 `👉 Reply *0* to return to Main Menu.`;
-
-                } else if (lowerText === '2.1' || lowerText === '21' || lowerText === 'ai & technology') {
-                    const { aiTech } = getGroupedCourses();
-                    let msg = `🤖 *AI & Technology Courses*\n━━━━━━━━━━━━━━━━━\n\n`;
-                    aiTech.forEach((c, idx) => {
-                        msg += `${idx + 1}️⃣ *${c.name}* (Type *2.1.${idx + 1}*)\n`;
-                    });
-                    msg += `\n👉 Option type karein (e.g. *2.1.1*) to get details.\n` +
-                           `👉 Reply *2* for Courses categories.\n` +
-                           `👉 Reply *0* to return to Main Menu.`;
-                    replyText = msg;
-
-                } else if (lowerText === '2.2' || lowerText === '22' || lowerText === 'career programs') {
-                    const { career } = getGroupedCourses();
-                    let msg = `🚀 *Career Programs*\n━━━━━━━━━━━━━━━━━\n\n`;
-                    career.forEach((c, idx) => {
-                        msg += `${idx + 1}️⃣ *${c.name}* (Type *2.2.${idx + 1}*)\n`;
-                    });
-                    msg += `\n👉 Option type karein (e.g. *2.2.1*) to get details.\n` +
-                           `👉 Reply *2* for Courses categories.\n` +
-                           `👉 Reply *0* to return to Main Menu.`;
-                    replyText = msg;
-
-                } else if (lowerText === '2.3' || lowerText === '23' || lowerText === 'academic coaching' || lowerText === 'coaching') {
-                    const { academic } = getGroupedCourses();
-                    let msg = `📚 *Academic Coaching Programs*\n━━━━━━━━━━━━━━━━━\n\n`;
-                    academic.forEach((c, idx) => {
-                        msg += `${idx + 1}️⃣ *${c.name}* (Type *2.3.${idx + 1}*)\n`;
-                    });
-                    msg += `\n👉 Option type karein (e.g. *2.3.1*) to get details.\n` +
-                           `👉 Reply *2* for Courses categories.\n` +
-                           `👉 Reply *0* to return to Main Menu.`;
-                    replyText = msg;
-
-                } else if (lowerText === '2.4' || lowerText === '24' || lowerText === 'other programs') {
-                    const { other } = getGroupedCourses();
-                    let msg = `📖 *Other Programs*\n━━━━━━━━━━━━━━━━━\n\n`;
-                    other.forEach((c, idx) => {
-                        msg += `${idx + 1}️⃣ *${c.name}* (Type *2.4.${idx + 1}*)\n`;
-                    });
-                    msg += `\n👉 Option type karein (e.g. *2.4.1*) to get details.\n` +
-                           `👉 Reply *2* for Courses categories.\n` +
-                           `👉 Reply *0* to return to Main Menu.`;
-                    replyText = msg;
-
-                } else if (lowerText === '4' || lowerText === 'contact' || lowerText === 'phone' || lowerText === 'email' || lowerText === 'address') {
-                    // Contact Info Sub-menu
+                } else if (lowerText === 'contact' || lowerText === 'phone' || lowerText === 'email') {
+                    setCtx('contact');
                     replyText = `📬 *Contact Information — The Student Space*\n━━━━━━━━━━━━━━━━━\n` +
-                                `Aap ko kaunsi contact details chahiye? Please choose:\n\n` +
-                                `1️⃣ *Phone Number* (Type *4.1*)\n` +
-                                `2️⃣ *WhatsApp Number* (Type *4.2*)\n` +
-                                `3️⃣ *Email Address* (Type *4.3*)\n` +
-                                `4️⃣ *Office Address & Landmark* (Type *4.4*)\n` +
-                                `5️⃣ *Social Media Links* (Type *4.5*)\n\n` +
-                                `👉 Option type karein (e.g. *4.1* or *WhatsApp*).\n` +
+                                `Aap ko kaunsi contact details chahiye?\n\n` +
+                                `1️⃣ *Phone Number*\n` +
+                                `2️⃣ *WhatsApp Number*\n` +
+                                `3️⃣ *Email Address*\n` +
+                                `4️⃣ *Office Address & Landmark*\n` +
+                                `5️⃣ *Social Media Links*\n\n` +
+                                `👉 Number type karein.\n` +
                                 `👉 Reply *0* to return to Main Menu.`;
-
-                } else if (lowerText === '4.1' || lowerText === '41' || lowerText === 'phone number') {
-                    replyText = `📞 *Phone Number — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
-                                `Aap humein is number par call kar sakte hain:\n` +
-                                `👉 *0322 1761566*\n\n` +
-                                `👉 Reply *4* for other Contact options.\n` +
-                                `👉 Reply *0* to return to Main Menu.`;
-
-                } else if (lowerText === '4.2' || lowerText === '42' || lowerText === 'whatsapp number') {
-                    replyText = `💬 *WhatsApp — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
-                                `Aap is official WhatsApp chat par message kar sakte hain:\n` +
-                                `👉 *0322 1761566*\n\n` +
-                                `👉 Reply *4* for other Contact options.\n` +
-                                `👉 Reply *0* to return to Main Menu.`;
-
-                } else if (lowerText === '4.3' || lowerText === '43' || lowerText === 'email address') {
-                    replyText = `✉️ *Email Address — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
-                                `Aap humein email send kar sakte hain:\n` +
-                                `👉 *info@thestudentspace.com*\n\n` +
-                                `👉 Reply *4* for other Contact options.\n` +
-                                `👉 Reply *0* to return to Main Menu.`;
-
-                } else if (lowerText === '4.4' || lowerText === '44' || lowerText === 'office address') {
-                    replyText = `📍 *Office Address — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
-                                `*Address:* W-003, Ground Floor, Haroon Royal City Phase 3, Block 17, Gulistan-e-Johar, Karachi.\n\n` +
-                                `*Landmark:* Near Federal Urdu University / Continental Bakery.\n` +
-                                `🗺️ *Google Maps:* https://maps.google.com/?q=The+Student+Space+Gulistan-e-Johar+Karachi\n\n` +
-                                `👉 Reply *4* for other Contact options.\n` +
-                                `👉 Reply *0* to return to Main Menu.`;
-
-                } else if (lowerText === '4.5' || lowerText === '45' || lowerText === 'social media') {
-                    replyText = `🌐 *Social Media Links — The Student Space*\n━━━━━━━━━━━━━━━━━\n\n` +
-                                `Humare social channels follow/visit karein:\n` +
-                                `• *Facebook:* https://facebook.com/thestudentspace\n` +
-                                `• *Instagram:* https://instagram.com/thestudentspace\n` +
-                                `• *LinkedIn:* https://linkedin.com/company/thestudentspace\n\n` +
-                                `👉 Reply *4* for other Contact options.\n` +
-                                `👉 Reply *0* to return to Main Menu.`;
-
-                } else if (lowerText === '5' || lowerText === 'fee' || lowerText === 'fees' || lowerText === 'charges') {
-                    // Fee Details Sub-menu
+                } else if (lowerText === 'fee' || lowerText === 'fees' || lowerText === 'charges') {
+                    setCtx('fees');
                     replyText = `💰 *Fee Structures — The Student Space*\n━━━━━━━━━━━━━━━━━\n` +
-                                `Aap kis category ke courses ki fees check karna chahte hain? Please choose:\n\n` +
-                                `1️⃣ *AI & Technology Fees* (Type *5.1*)\n` +
-                                `2️⃣ *Career Programs Fees* (Type *5.2*)\n` +
-                                `3️⃣ *Academic Coaching Fees* (Type *5.3*)\n` +
-                                `4️⃣ *Other Programs Fees* (Type *5.4*)\n\n` +
-                                `👉 Option type karein (e.g. *5.1* or *Fees*).\n` +
+                                `Aap kis category ke courses ki fees check karna chahte hain?\n\n` +
+                                `1️⃣ *AI & Technology Fees*\n` +
+                                `2️⃣ *Career Programs Fees*\n` +
+                                `3️⃣ *Academic Coaching Fees*\n` +
+                                `4️⃣ *Other Programs Fees*\n\n` +
+                                `👉 Number type karein.\n` +
                                 `👉 Reply *0* to return to Main Menu.`;
 
-                } else if (lowerText === '5.1' || lowerText === '51') {
-                    const { aiTech } = getGroupedCourses();
-                    let msg = `💰 *AI & Technology — Fee Structure*\n━━━━━━━━━━━━━━━━━\n\n`;
-                    aiTech.forEach((c, idx) => {
-                        msg += `${idx + 1}️⃣ *${c.name}* (Type *5.1.${idx + 1}*)\n`;
-                    });
-                    msg += `\n👉 Option type karein (e.g. *5.1.1*) to see fees.\n` +
-                           `👉 Reply *5* for Fee categories.\n` +
-                           `👉 Reply *0* to return to Main Menu.`;
-                    replyText = msg;
-
-                } else if (lowerText === '5.2' || lowerText === '52') {
-                    const { career } = getGroupedCourses();
-                    let msg = `🚀 *Career Programs — Fee Structure*\n━━━━━━━━━━━━━━━━━\n\n`;
-                    career.forEach((c, idx) => {
-                        msg += `${idx + 1}️⃣ *${c.name}* (Type *5.2.${idx + 1}*)\n`;
-                    });
-                    msg += `\n👉 Option type karein (e.g. *5.2.1*) to see fees.\n` +
-                           `👉 Reply *5* for Fee categories.\n` +
-                           `👉 Reply *0* to return to Main Menu.`;
-                    replyText = msg;
-
-                } else if (lowerText === '5.3' || lowerText === '53') {
-                    const { academic } = getGroupedCourses();
-                    let msg = `📚 *Academic Coaching — Fee Structure*\n━━━━━━━━━━━━━━━━━\n\n`;
-                    academic.forEach((c, idx) => {
-                        msg += `${idx + 1}️⃣ *${c.name}* (Type *5.3.${idx + 1}*)\n`;
-                    });
-                    msg += `\n👉 Option type karein (e.g. *5.3.1*) to see fees.\n` +
-                           `👉 Reply *5* for Fee categories.\n` +
-                           `👉 Reply *0* to return to Main Menu.`;
-                    replyText = msg;
-
-                } else if (lowerText === '5.4' || lowerText === '54') {
-                    const { other } = getGroupedCourses();
-                    let msg = `📖 *Other Programs — Fee Structure*\n━━━━━━━━━━━━━━━━━\n\n`;
-                    other.forEach((c, idx) => {
-                        msg += `${idx + 1}️⃣ *${c.name}* (Type *5.4.${idx + 1}*)\n`;
-                    });
-                    msg += `\n👉 Option type karein (e.g. *5.4.1*) to see fees.\n` +
-                           `👉 Reply *5* for Fee categories.\n` +
-                           `👉 Reply *0* to return to Main Menu.`;
-                    replyText = msg;
-
+                // ── Lead escalation capture ─────────────────────────────────
                 } else if (conv && conv.registrationStatus === 'Lead_Escalation') {
-                    // Lead data captured
                     db.addLead({
                         name,
                         phone: text,
@@ -793,114 +1096,29 @@ function initWhatsApp() {
                         status: 'New'
                     });
                     db.updateConversationStatus(phone, {
-                        registrationStatus: 'Idle'
+                        registrationStatus: 'Idle',
+                        menuContext: 'main'
                     });
                     replyText = `✅ Thank you! We have saved your request. An admission representative will contact you very shortly on *${text}*. 📞`;
+
+                // ── AI Fallback ─────────────────────────────────────────────
                 } else {
-                    // Check if they are asking about a specific course via hierarchical sub-option (e.g. 2.1.1 or 211)
-                    const cleanText = text.trim();
-                    const cleanInput = cleanText.replace(/[^0-9]/g, '');
-                    let matchedCourse = null;
-                    let isFeeDetailsQuery = false;
-                    let parentCategoryIdx = null;
-
-                    if (cleanInput.length === 3 && (cleanInput.startsWith('2') || cleanInput.startsWith('5'))) {
-                        const actionType = cleanInput[0]; // '2' or '5'
-                        const catIdx = parseInt(cleanInput[1], 10); // 1 = aiTech, 2 = career, 3 = academic, 4 = other
-                        const courseIdx = parseInt(cleanInput[2], 10) - 1;
-                        parentCategoryIdx = catIdx;
-
-                        const { aiTech, career, academic, other } = getGroupedCourses();
-                        let selectedList = [];
-                        if (catIdx === 1) selectedList = aiTech;
-                        else if (catIdx === 2) selectedList = career;
-                        else if (catIdx === 3) selectedList = academic;
-                        else if (catIdx === 4) selectedList = other;
-
-                        if (courseIdx >= 0 && courseIdx < selectedList.length) {
-                            matchedCourse = selectedList[courseIdx];
-                            if (actionType === '5') {
-                                isFeeDetailsQuery = true;
-                            }
-                        }
-                    } else if (cleanText.includes('.')) {
-                        const parts = cleanText.split('.');
-                        if (parts.length === 3 && (parts[0] === '2' || parts[0] === '5')) {
-                            const actionType = parts[0];
-                            const catIdx = parseInt(parts[1], 10);
-                            const courseIdx = parseInt(parts[2], 10) - 1;
-                            parentCategoryIdx = catIdx;
-
-                            const { aiTech, career, academic, other } = getGroupedCourses();
-                            let selectedList = [];
-                            if (catIdx === 1) selectedList = aiTech;
-                            else if (catIdx === 2) selectedList = career;
-                            else if (catIdx === 3) selectedList = academic;
-                            else if (catIdx === 4) selectedList = other;
-
-                            if (courseIdx >= 0 && courseIdx < selectedList.length) {
-                                matchedCourse = selectedList[courseIdx];
-                                if (actionType === '5') {
-                                    isFeeDetailsQuery = true;
-                                }
+                    const settings = db.getSettings();
+                    let matchedRule = null;
+                    if (settings.agentRules && Array.isArray(settings.agentRules)) {
+                        const lowerInput = text.toLowerCase().trim();
+                        for (const rule of settings.agentRules) {
+                            if (rule.keyword && lowerInput.includes(rule.keyword.toLowerCase().trim())) {
+                                matchedRule = rule.response;
+                                break;
                             }
                         }
                     }
 
-                    if (matchedCourse) {
-                        if (isFeeDetailsQuery) {
-                            replyText = `💰 *${matchedCourse.name} — Fee Structure*\n━━━━━━━━━━━━━━━━━\n\n` +
-                                        `💵 *Total Course Fee:* ${matchedCourse.fee}\n` +
-                                        `💳 *Monthly Installment:* ${matchedCourse.installment}\n` +
-                                        `⏱️ *Duration:* ${matchedCourse.duration}\n\n` +
-                                        `👉 Reply *5.${parentCategoryIdx}* for this category's fees.\n` +
-                                        `👉 Reply *0* to return to Main Menu.`;
-                        } else {
-                            replyText = `📚 *${matchedCourse.name}*\n━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                                        `📖 *Description:* ${matchedCourse.description}\n\n` +
-                                        `⏱️ *Duration:* ${matchedCourse.duration}\n` +
-                                        `💰 *Total Fee:* ${matchedCourse.fee}\n` +
-                                        `💳 *Installment:* ${matchedCourse.installment}\n` +
-                                        `📅 *Schedule:* ${matchedCourse.schedule}\n` +
-                                        `💼 *Career Opportunities:* ${matchedCourse.careerOpportunities}\n\n` +
-                                        `👉 Reply *2.${parentCategoryIdx}* for this category's list.\n` +
-                                        `👉 Reply *3* or *Apply* to Enroll in this course.\n` +
-                                        `👉 Reply *0* to return to the Main Menu.`;
-                        }
+                    if (matchedRule) {
+                        replyText = matchedRule;
                     } else {
-                        // Otherwise, match by course name or index number (Option 2 fallback / search)
-                        const ordered = getOrderedCourses();
-                        const num = parseInt(cleanText, 10);
-                        let matchedCourseSearch = null;
-
-                        if (!isNaN(num) && num > 0 && num <= ordered.length) {
-                            matchedCourseSearch = ordered[num - 1];
-                        } else {
-                            matchedCourseSearch = ordered.find(c => {
-                                const cName = c.name.toLowerCase();
-                                return lowerText === cName || 
-                                       lowerText === `${cName} details` || 
-                                       lowerText === `${cName} fee` || 
-                                       lowerText === `${cName} fees` || 
-                                       lowerText === `details of ${cName}` || 
-                                       lowerText === `fee of ${cName}`;
-                            });
-                        }
-
-                        if (matchedCourseSearch) {
-                            replyText = `📚 *${matchedCourseSearch.name}*\n━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                                        `📖 *Description:* ${matchedCourseSearch.description}\n\n` +
-                                        `⏱️ *Duration:* ${matchedCourseSearch.duration}\n` +
-                                        `💰 *Total Fee:* ${matchedCourseSearch.fee}\n` +
-                                        `💳 *Installment:* ${matchedCourseSearch.installment}\n` +
-                                        `📅 *Schedule:* ${matchedCourseSearch.schedule}\n` +
-                                        `💼 *Career Opportunities:* ${matchedCourseSearch.careerOpportunities}\n\n` +
-                                        `👉 To enroll in this course, reply with *3* or *Apply*.\n` +
-                                        `👉 Reply *0* to return to the Main Menu.`;
-                        } else {
-                            // Fallback: Let Gemini AI handle the query
-                            replyText = await getAIResponse(text, chatHistory, conv);
-                        }
+                        replyText = await getAIResponse(text, chatHistory, conv);
                     }
                 }
             }
@@ -986,11 +1204,13 @@ async function executeRegistrationFormGeneration(phone, name, collectedData) {
                         `📚 *Course:* ${collectedData.course}\n` +
                         `⏰ *Batch:* ${collectedData.batch}\n\n` +
                         `━━━━━━━━━━━━━━━━━━━━\n` +
-                        `📋 *Aap ka Registration Form tayyar ho gaya hai!*\n\n` +
-                        `👉 Apna Form hasil karne ke liye, *The Student Space* ki branch par tashreef layein:\n\n` +
+                        `📋 *Aap ka Registration Form aur ID Card tayyar ho gaya hai!*\n\n` +
+                        `👉 Apna *Registration Form* aur *ID Card* hasil karne ke liye\n` +
+                        `*The Student Space* ki branch par tashreef layein:\n\n` +
                         `📍 *W-003, Ground Floor, Haroon Royal City,*\n` +
                         `*Phase 3, Block 17, Gulistan-e-Johar, Karachi*\n\n` +
-                        `🏛️ Wahan se apna Form le kar, us par *Official Stamp / Attestation* lagwayein.\n\n` +
+                        `🏛️ Wahan se apna Form aur ID Card le kar,\n` +
+                        `us par *Official Stamp / Attestation* lagwayein.\n\n` +
                         `📞 *Contact:* 0322 1761566\n\n` +
                         `✨ *Jald hi Admission confirm karne ke liye aap se rabta kiya jayega!*\n\n` +
                         `*Welcome to The Student Space Family! 🎉*`;
@@ -1000,6 +1220,44 @@ async function executeRegistrationFormGeneration(phone, name, collectedData) {
 
                     broadcast('registration', registrationRecord);
                     console.log(`Successfully completed registration for ${studentId}. Form stored internally.`);
+
+                    // Auto-generate ID Card PDF for this student
+                    try {
+                        const students = db.getStudents();
+                        const studentRecord = students.find(s => s.rollNo === registrationRecord.rollNo);
+                        if (studentRecord) {
+                            const idCardDir = path.join(__dirname, '..', 'data', 'id_cards');
+                            if (!fs.existsSync(idCardDir)) fs.mkdirSync(idCardDir, { recursive: true });
+                            const idCardPath = path.join(idCardDir, `${studentRecord.rollNo}_id_card.pdf`);
+
+                            // Build photoBase64 if photo exists
+                            let photoBase64 = null;
+                            if (studentRecord.photo) {
+                                const photoPath = path.join(__dirname, '..', studentRecord.photo.replace(/^\//, ''));
+                                if (fs.existsSync(photoPath)) {
+                                    const ext = path.extname(photoPath).replace('.', '') || 'jpeg';
+                                    photoBase64 = `data:image/${ext};base64,` + fs.readFileSync(photoPath).toString('base64');
+                                }
+                            }
+
+                            await generateIdCard({
+                                student: studentRecord,
+                                logoBase64: null,
+                                photoBase64,
+                                outPath: idCardPath
+                            });
+
+                            // Update student record with id card path
+                            db.updateStudent(studentRecord.id, {
+                                idCardPdf: `/data/id_cards/${studentRecord.rollNo}_id_card.pdf`
+                            });
+
+                            // ID card saved silently for admin dashboard — student must visit branch to collect
+                            console.log(`ID Card generated for ${studentRecord.rollNo} at ${idCardPath}`);
+                        }
+                    } catch (idErr) {
+                        console.error('ID Card auto-generation failed:', idErr.message);
+                    }
                 } else {
                     throw new Error(result.error || "Form generation script returned failure.");
                 }
@@ -1014,10 +1272,35 @@ async function executeRegistrationFormGeneration(phone, name, collectedData) {
     }
 }
 
+async function disconnectWhatsApp() {
+    if (client) {
+        try {
+            await client.logout().catch(() => {});
+            await client.destroy().catch(() => {});
+        } catch (e) {
+            console.error("Error destroying WhatsApp client:", e);
+        }
+    }
+    // Delete .wwebjs_auth directory
+    const authDir = path.join(__dirname, '..', '.wwebjs_auth');
+    if (fs.existsSync(authDir)) {
+        try {
+            fs.rmSync(authDir, { recursive: true, force: true });
+        } catch (e) {
+            console.error("Error deleting auth directory:", e);
+        }
+    }
+    connectionStatus = 'Disconnected';
+    qrCodeDataUri = null;
+    client = null;
+    broadcast('status', { status: connectionStatus, qr: qrCodeDataUri });
+}
+
 // Actions
 module.exports = {
     init: initWhatsApp,
     getClient: () => client,
     getStatus: () => ({ status: connectionStatus, qr: qrCodeDataUri }),
-    setWsServer
+    setWsServer,
+    disconnect: disconnectWhatsApp
 };

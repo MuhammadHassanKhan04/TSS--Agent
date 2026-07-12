@@ -1,0 +1,23 @@
+[
+  {
+    "id": "TCH-1783358923985",
+    "name": "M.Hassan Khan",
+    "fatherName": "Rustam Khan",
+    "cnic": "4210115487463",
+    "phone": "03433452279",
+    "email": "hassankhan034304@gmail.com",
+    "address": "Defence View Society Road, Phase 1 Defence View Housing Society, Karachi, Pakistan",
+    "qualification": "Matric",
+    "subject": "Computer Science",
+    "courses": [
+      "Generative AI"
+    ],
+    "schedule": "Mon,Wed,Sat",
+    "salary": 15000,
+    "joinDate": "2026-04-12",
+    "status": "active",
+    "photo": "",
+    "notes": "",
+    "createdAt": "2026-07-06T17:28:43.985Z"
+  }
+]
