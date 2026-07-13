@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node server/server.js",
     "build": "cd client && npm install && npm run build",
+    "setup": "npm install && cd client && npm install && npm run build",
     "dev": "node server/server.js"
   },
   "keywords": [

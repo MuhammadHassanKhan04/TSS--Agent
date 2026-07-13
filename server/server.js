@@ -934,6 +934,22 @@ app.get('/api/id-card/:id', async (req, res) => {
 
 // Serve frontend client in production
 const CLIENT_BUILD_DIR = path.join(__dirname, '..', 'client', 'dist');
+const CLIENT_INDEX = path.join(CLIENT_BUILD_DIR, 'index.html');
+
+// Auto-build client if dist doesn't exist (fresh install on new machine)
+if (!fs.existsSync(CLIENT_INDEX)) {
+    console.log('⚙️  client/dist not found — building React frontend...');
+    try {
+        const { execSync } = require('child_process');
+        const clientDir = path.join(__dirname, '..', 'client');
+        execSync('npm install', { cwd: clientDir, stdio: 'inherit' });
+        execSync('npm run build', { cwd: clientDir, stdio: 'inherit' });
+        console.log('✅ Frontend built successfully!');
+    } catch (buildErr) {
+        console.error('❌ Frontend build failed:', buildErr.message);
+    }
+}
+
 app.use(express.static(CLIENT_BUILD_DIR));
 
 app.get(/.*/, (req, res, next) => {
@@ -942,7 +958,7 @@ app.get(/.*/, (req, res, next) => {
         return next();
     }
     // Serve React index.html
-    res.sendFile(path.join(CLIENT_BUILD_DIR, 'index.html'));
+    res.sendFile(CLIENT_INDEX);
 });
 
 // Setup WebSockets
