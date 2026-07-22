@@ -70,9 +70,9 @@ function detectLanguage(text) {
 // ─── Bilingual Greeting ───────────────────────────────────────────────────────
 const GREETINGS_URDU = [
     "Assalamoalaikum! 🌟 *The Student Space Institute* mein khush aamdeed! Main aap ki kya madad kar sakta hoon? 📚",
-    "Aoa! *The Student Space* mein aap ka swaagat hai! Aaj main aap ki kaise madad kar sakta hoon? ✨",
+    "Aoa! *The Student Space* mein aap ka khush aamdeed! Aaj main aap ki kaise madad kar sakta hoon? ✨",
     "Salam! 🎓 *The Student Space* se raabta karne ka shukriya! Aap ko kisi cheez mein help chahiye? 🚀",
-    "Walaikumassalam! *The Student Space* mein aap ka dil se swaagat hai! Main kya service day sakta hoon? 🌟"
+    "Walaikumassalam! *The Student Space* mein aap ka dil se khush aamdeed! Main kya service day sakta hoon? 🌟"
 ];
 
 const GREETINGS_ENGLISH = [
@@ -330,7 +330,7 @@ function getMenu(lang) {
     if (lang === 'english') {
         return `🎓 *THE STUDENT SPACE INSTITUTE*\n━━━━━━━━━━━━━━━━━━━━\nWe're here to guide you! Please choose:\n\n1️⃣ About the Institute\n2️⃣ Courses & Programs\n3️⃣ Start Admission / Enroll Now\n4️⃣ Contact Information\n5️⃣ Fee Details\n\nOr just type your question and I'll answer! 😊`;
     }
-    return `🎓 *THE STUDENT SPACE INSTITUTE*\n━━━━━━━━━━━━━━━━━━━━\nHum aap ki madad ke liye haazir hain! Kripya choose karein:\n\n1️⃣ Institute ke baare mein\n2️⃣ Courses & Programs\n3️⃣ Admission Shuru Karein / Enroll\n4️⃣ Raabta (Contact) Information\n5️⃣ Fee Details\n\nYa apna sawal type karein, main jawab dunga! 😊`;
+    return `🎓 *THE STUDENT SPACE INSTITUTE*\n━━━━━━━━━━━━━━━━━━━━\nHum aap ki madad ke liye haazir hain! Option choose karein:\n\n1️⃣ Institute ke baare mein\n2️⃣ Courses & Programs\n3️⃣ Admission Shuru Karein / Enroll\n4️⃣ Raabta (Contact) Information\n5️⃣ Fee Details\n\nYa apna sawal type karein, main jawab dunga! 😊`;
 }
 
 function getAboutMenuText() {
@@ -450,10 +450,19 @@ async function getAIResponse(userMessage, chatHistory = [], activeState = null) 
         promptBase += `\n\nCustom FAQ/QA Rules to follow:\n${rulesText}`;
     }
 
-    // Language instruction — always respond in the user's preferred language
+    // Language instruction — strict Pakistani Roman Urdu enforcement (No Hindi vocabulary)
     const langInstruction = activeState && activeState.language === 'english'
         ? `\n\nIMPORTANT: This user communicates in ENGLISH. Always respond in clear, professional English only.`
-        : `\n\nIMPORTANT: Is user ka pehla message Urdu ya Roman Urdu mein tha. Hamesha Roman Urdu ya pure Urdu mein jawab dein. Agar user English mein likhay to bhi Roman Urdu mein jawab dein jab tak woh explicitly English mein jawab mangein. Pakistani style Roman Urdu use karein.`;
+        : `\n\nCRITICAL LANGUAGE DIRECTIVE FOR PAKISTANI URDU:
+- You MUST respond strictly in authentic Pakistani Roman Urdu (or Urdu script).
+- NEVER use Hindi words under any circumstances! Examples of BANNED Hindi words: "kripya", "swaagat", "dhanyawad", "namaste", "bataiye", "avashyakta", "shubh", "prasannata", "dayabad".
+- ALWAYS use proper Pakistani Urdu words:
+  * Instead of "kripya" -> Use "Barae karam" or "Please"
+  * Instead of "swaagat" -> Use "Khush Aamdeed" or "Welcome"
+  * Instead of "dhanyawad" -> Use "Shukriya" or "JazakAllah"
+  * Instead of "bataiye" -> Use "Bataein" or "Aap bataen"
+  * Instead of "avashyakta" -> Use "Zaroorat" or "Chahiye"
+- Keep the tone warm, professional, respectful, and 100% natural Pakistani conversational Urdu.`;
 
     const systemPrompt = `${promptBase}${langInstruction}\n\nIMPORTANT: When the user asks about a course or mentions a course name (e.g., "3D Animation", "Generative AI", etc.), you MUST explicitly show its details, especially the Schedule, Timings, and Days from the database.\n\nCurrent Time: ${new Date().toISOString()}`;
 
@@ -1040,14 +1049,14 @@ async function initWhatsApp() {
                             setCtx('main');
                             replyText = formatStudentFeeRecord(matched[0]);
                         } else if (matched.length > 1) {
-                            let msg = `🔍 *Multiple Students Found*\n━━━━━━━━━━━━━━━━━━━━━━━━━\nAap ke search keyword par 1 se zyada students mile hain. Kripya apna *Roll Number* (e.g. TSS-001) type karein:\n\n`;
+                            let msg = `🔍 *Multiple Students Found*\n━━━━━━━━━━━━━━━━━━━━━━━━━\nAap ke search keyword par 1 se zyada students mile hain. Barae karam apna *Roll Number* (e.g. TSS-001) type karein:\n\n`;
                             matched.forEach(s => {
                                 msg += `• *${s.name || s.fullName}* — Roll No: *${s.rollNo || 'N/A'}* (${s.course || 'Course'})\n`;
                             });
                             msg += `\n👉 Apna Roll Number type karein.`;
                             replyText = msg;
                         } else {
-                            replyText = `❌ Koi student record nahi mila "*${text}*" par.\n\nKripya sahi *Student Name*, *Roll Number (e.g. TSS-001)* ya *Registered Phone Number* re-type karein.\n👉 Reply *0* for Main Menu.`;
+                            replyText = `❌ Koi student record nahi mila "*${text}*" par.\n\nBarae karam sahi *Student Name*, *Roll Number (e.g. TSS-001)* ya *Registered Phone Number* re-type karein.\n👉 Reply *0* for Main Menu.`;
                         }
 
                     /* ── MAIN MENU bare number ── */
@@ -1118,14 +1127,14 @@ async function initWhatsApp() {
                         setCtx('main');
                         replyText = formatStudentFeeRecord(matched[0]);
                     } else if (matched.length > 1) {
-                        let msg = `🔍 *Multiple Students Found*\n━━━━━━━━━━━━━━━━━━━━━━━━━\nAap ke search keyword par 1 se zyada students mile hain. Kripya apna *Roll Number* (e.g. TSS-001) type karein:\n\n`;
+                        let msg = `🔍 *Multiple Students Found*\n━━━━━━━━━━━━━━━━━━━━━━━━━\nAap ke search keyword par 1 se zyada students mile hain. Barae karam apna *Roll Number* (e.g. TSS-001) type karein:\n\n`;
                         matched.forEach(s => {
                             msg += `• *${s.name || s.fullName}* — Roll No: *${s.rollNo || 'N/A'}* (${s.course || 'Course'})\n`;
                         });
                         msg += `\n👉 Apna Roll Number type karein.`;
                         replyText = msg;
                     } else {
-                        replyText = `❌ Koi student record nahi mila "*${text}*" par.\n\nKripya sahi *Student Name*, *Roll Number (e.g. TSS-001)* ya *Registered Phone Number* re-type karein.\n👉 Reply *0* for Main Menu.`;
+                        replyText = `❌ Koi student record nahi mila "*${text}*" par.\n\nBarae karam sahi *Student Name*, *Roll Number (e.g. TSS-001)* ya *Registered Phone Number* re-type karein.\n👉 Reply *0* for Main Menu.`;
                     }
 
                 // ── "back" keyword → go up one level ────────────────────────
@@ -1194,7 +1203,7 @@ async function initWhatsApp() {
                         replyText = recordMsg;
                     } else if (matched.length > 1) {
                         setCtx('fee_inquiry');
-                        let msg = `🔍 *Multiple Students Found*\n━━━━━━━━━━━━━━━━━━━━━━━━━\nAap ke search keyword par 1 se zyada students mile hain. Kripya apna *Roll Number* (e.g. TSS-001) type karein:\n\n`;
+                        let msg = `🔍 *Multiple Students Found*\n━━━━━━━━━━━━━━━━━━━━━━━━━\nAap ke search keyword par 1 se zyada students mile hain. Barae karam apna *Roll Number* (e.g. TSS-001) type karein:\n\n`;
                         matched.forEach(s => {
                             msg += `• *${s.name || s.fullName}* — Roll No: *${s.rollNo || 'N/A'}* (${s.course || 'Course'})\n`;
                         });
@@ -1202,7 +1211,7 @@ async function initWhatsApp() {
                         replyText = msg;
                     } else {
                         setCtx('fee_inquiry');
-                        replyText = `💳 *Fee Status & Record Check — The Student Space*\n━━━━━━━━━━━━━━━━━━━━━━━━━\nAap ka fee record check karne ke liye, kripya niche di gayi details mein se koi **EK** bataein:\n\n👉 *Student Name* (e.g. Ali Khan)\n👉 *Roll Number / Student ID* (e.g. TSS-001)\n👉 *Registered Phone Number*\n👉 *Fee Slip / Receipt ID*\n\n_(Aap Name, Roll No ya Phone Number type karein)_`;
+                        replyText = `💳 *Fee Status & Record Check — The Student Space*\n━━━━━━━━━━━━━━━━━━━━━━━━━\nAap ka fee record check karne ke liye, barae karam niche di gayi details mein se koi **EK** bataein:\n\n👉 *Student Name* (e.g. Ali Khan)\n👉 *Roll Number / Student ID* (e.g. TSS-001)\n👉 *Registered Phone Number*\n👉 *Fee Slip / Receipt ID*\n\n_(Aap Name, Roll No ya Phone Number type karein)_`;
                     }
 
                 // ── enroll shortcut ─────────────────────────────────────────
