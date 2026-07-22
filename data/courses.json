@@ -318,5 +318,15 @@
     "timings": "Evening",
     "description": "Intensive Matric / SSC-II coaching for Grade 10 students with full syllabus coverage, past paper practice, mock exams, and exam stress management.",
     "careerOpportunities": "Matric Board Distinction, University Entry Preparation"
+  },
+  {
+    "name": "CIT – Certificate in Information Technology",
+    "duration": "4 Months",
+    "fee": "20000",
+    "installment": "5000",
+    "schedule": "Mon,Wed,Sat",
+    "description": "Build a strong foundation in essential computer and digital skills. Learn computer fundamentals, Microsoft Office, internet usage, typing, basic graphic designing, and essential digital tools to become confident in today’s digital world.\nWhat You’ll Learn:\nComputer Fundamentals\nWindows & File Management\nMicrosoft Word\nMicrosoft Excel\nMicrosoft PowerPoint\nInternet & Email\nTyping Skills\nBasic Graphic Designing\nDigital Tools & Productivity\nCareer Paths:\n\nComputer Operator, Office Assistant, Data Entry Operator, IT Support Assistant, Junior Computer Instructor",
+    "careerOpportunities": "Monday, Wednesday & Saturday",
+    "id": "course-1784736500644"
   }
 ]

@@ -18,5 +18,25 @@
     "paidDate": "2026-07-08T14:05:58.922Z",
     "notes": "",
     "createdAt": "2026-07-08T14:05:52.422Z"
+  },
+  {
+    "id": "FEE-1784736547486",
+    "studentId": "STU-1784736308664",
+    "month": "June 2026",
+    "amount": "0",
+    "status": "unpaid",
+    "paidDate": null,
+    "notes": "📢 **Fee Reminder Notice**\n\nDear Student/Parent,\n\nThis is a gentle reminder that your course fee is still pending. Kindly submit the outstanding fee as soon as possible to continue your classes without interruption.\n\nThank you for your cooperation.\n\n**The Student Space**\n",
+    "createdAt": "2026-07-22T16:09:07.486Z"
+  },
+  {
+    "id": "FEE-1784737152939",
+    "studentId": "STU-1784737121652",
+    "month": "June 2026",
+    "amount": "0",
+    "status": "unpaid",
+    "paidDate": null,
+    "notes": "",
+    "createdAt": "2026-07-22T16:19:12.939Z"
   }
 ]

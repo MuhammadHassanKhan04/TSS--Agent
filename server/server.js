@@ -526,7 +526,7 @@ app.post('/api/whatsapp/send-reminder', async (req, res) => {
     const formatted = resolveTargetJid(target);
     if (!formatted) return res.status(400).json({ success: false, error: 'Could not resolve a valid phone number.' });
     
-    const message = `Assalam-o-Alaikum 🌙\nDear Parent,\n\nYour child *${studentName}*'s monthly fee of *Rs ${amount}* for *${month}* is currently pending.\n\nPlease submit it at your earliest convenience.\n\nThank you 🙏\n*The Student Space — Admin*`;
+    const message = `Assalam-o-Alaikum 🌙\nDear Parent,\n\nYour child *${studentName}*'s monthly fee of *Rs ${amount}* for *${month}* is currently pending.\n\nPlease submit it at your earliest convenience.\n\nThank you.\n*The Student Space — Admin*`;
     try {
         await client.sendMessage(formatted, message);
         res.json({ success: true, sentTo: formatted, timestamp: new Date().toISOString() });
@@ -552,7 +552,7 @@ app.post('/api/whatsapp/send-fee-slip', async (req, res) => {
     const slipNumber = 'SLIP-' + Date.now().toString().slice(-6);
 
     // Caption text
-    const caption = `✅ *Fee Receipt — The Student Space*\n\n🎓 Student: *${studentName}*\n📅 Month: *${month}*\n💰 Amount Paid: *Rs ${amount}*\n📆 Date: *${dateStr}*\n\nStatus: ✅ *PAID*\n\nThank you for your payment! 🙏\n_The Student Space Institute_`;
+    const caption = `✅ *Fee Receipt — The Student Space*\n\n🎓 Student: *${studentName}*\n📅 Month: *${month}*\n💰 Amount Paid: *Rs ${amount}*\n📆 Date: *${dateStr}*\n\nStatus: ✅ *PAID*\n\nThank you for your payment!\n_The Student Space Institute_`;
 
     try {
         // Generate fee slip image

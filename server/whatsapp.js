@@ -531,6 +531,102 @@ function handleFallbackOffline(msg) {
     return `Welcome to *The Student Space Institute*! How can I assist you today? You can choose from our options:\n\n` + getMenu();
 }
 
+// ─── Student Fee Record Lookup & Formatting Helpers ──────────────────────────
+function formatStudentFeeRecord(student) {
+    const payments = db.getFeePaymentsByStudent(student.id) || [];
+    const monthlyFee = parseFloat(student.monthlyFee || 0);
+    const discount = parseFloat(student.discount || 0);
+    const effectiveFee = Math.max(0, monthlyFee - discount);
+    
+    let totalPaid = 0;
+    let paymentsListStr = '';
+    
+    if (payments.length === 0) {
+        paymentsListStr = '• _Abhi tak koi payment record nahi hua._\n';
+    } else {
+        payments.forEach(p => {
+            const amt = parseFloat(p.amount || 0);
+            if (p.status === 'paid') totalPaid += amt;
+            const statusIcon = p.status === 'paid' ? '✅' : p.status === 'partial' ? '🟡' : '🔴';
+            const statusText = p.status === 'paid' ? 'PAID' : p.status === 'partial' ? 'PARTIAL' : 'PENDING';
+            const dateText = p.paidDate ? ` (${new Date(p.paidDate).toLocaleDateString('en-PK')})` : '';
+            paymentsListStr += `${statusIcon} *${p.month || 'Fee'}:* ${statusText} — Rs ${amt.toLocaleString()}${dateText}\n`;
+        });
+    }
+
+    return `📊 *Student Fee Record — The Student Space*\n` +
+           `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+           `👤 *Student Name:* ${student.name || student.fullName || 'N/A'}\n` +
+           `🎓 *Roll No:* ${student.rollNo || 'N/A'}\n` +
+           `🆔 *Student ID:* ${student.id}\n` +
+           `📚 *Course:* ${student.course || 'N/A'}\n` +
+           `💵 *Monthly Fee:* Rs ${monthlyFee.toLocaleString()}` + (discount > 0 ? ` (Discount: Rs ${discount.toLocaleString()} → Net: Rs ${effectiveFee.toLocaleString()})` : '') + `\n\n` +
+           `💳 *Payment History:*\n${paymentsListStr}\n` +
+           `💰 *Total Amount Paid:* Rs ${totalPaid.toLocaleString()}\n` +
+           `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+           `💡 *Note:* Agar aap ne fee submit kar di hai aur yahan pending show ho raha hai, to payment screenshot / receipt reference bhej dein, admin team verify kar ke receipt & status update kar degi! 📄`;
+}
+
+function findStudentsByIdentifier(queryStr, senderPhone) {
+    const students = db.getStudents() || [];
+    if (!students.length) return [];
+
+    const cleanQuery = (queryStr || '').trim().toLowerCase();
+    const cleanPhone = (senderPhone || '').replace(/[^0-9]/g, '');
+
+    // 1. If query matches Roll No (e.g. TSS-001 or tss-001) or Student ID (STU-xxx)
+    if (cleanQuery) {
+        let matched = students.filter(s => 
+            (s.rollNo || '').toLowerCase() === cleanQuery ||
+            (s.rollNo || '').toLowerCase().replace(/[^a-z0-9]/g, '') === cleanQuery.replace(/[^a-z0-9]/g, '') ||
+            (s.id || '').toLowerCase() === cleanQuery
+        );
+        if (matched.length > 0) return matched;
+
+        // Check by fee payments / slip number (e.g. FEE-xxx or SLIP-xxx)
+        if (cleanQuery.includes('fee-') || cleanQuery.includes('slip-')) {
+            const allPayments = db.getFeePayments() || [];
+            const foundPay = allPayments.find(p => (p.id || '').toLowerCase() === cleanQuery);
+            if (foundPay) {
+                const sMatch = students.filter(s => s.id === foundPay.studentId);
+                if (sMatch.length > 0) return sMatch;
+            }
+        }
+
+        // 2. Match by student Name or Father Name (partial or exact)
+        matched = students.filter(s => {
+            const sName = (s.name || s.fullName || '').toLowerCase();
+            const fName = (s.fatherName || '').toLowerCase();
+            return (sName && sName.includes(cleanQuery)) || (fName && fName.includes(cleanQuery));
+        });
+        if (matched.length > 0) return matched;
+
+        // 3. Match by phone digits in query
+        const queryDigits = cleanQuery.replace(/[^0-9]/g, '');
+        if (queryDigits.length >= 7) {
+            matched = students.filter(s => {
+                const sp = (s.phone || '').replace(/[^0-9]/g, '');
+                const sw = (s.whatsapp || '').replace(/[^0-9]/g, '');
+                return (sp && sp.includes(queryDigits)) || (sw && sw.includes(queryDigits));
+            });
+            if (matched.length > 0) return matched;
+        }
+    }
+
+    // 4. Fallback: match by sender's WhatsApp phone number
+    if (cleanPhone && cleanPhone.length >= 7) {
+        const senderDigits = cleanPhone.slice(-10); // last 10 digits
+        const matched = students.filter(s => {
+            const sp = (s.phone || '').replace(/[^0-9]/g, '');
+            const sw = (s.whatsapp || '').replace(/[^0-9]/g, '');
+            return (sp && sp.endsWith(senderDigits)) || (sw && sw.endsWith(senderDigits));
+        });
+        if (matched.length > 0) return matched;
+    }
+
+    return [];
+}
+
 // Intent mapper to store analytic categories
 function parseIntent(text) {
     const t = text.toLowerCase();
@@ -933,6 +1029,23 @@ function initWhatsApp() {
                             replyText = `❓ Please choose a valid option (1–${list.length}) or reply *0* for Main Menu.`;
                         }
 
+                    /* ── FEE INQUIRY bare number ── */
+                    } else if (menuCtx === 'fee_inquiry') {
+                        const matched = findStudentsByIdentifier(text, phone);
+                        if (matched.length === 1) {
+                            setCtx('main');
+                            replyText = formatStudentFeeRecord(matched[0]);
+                        } else if (matched.length > 1) {
+                            let msg = `🔍 *Multiple Students Found*\n━━━━━━━━━━━━━━━━━━━━━━━━━\nAap ke search keyword par 1 se zyada students mile hain. Kripya apna *Roll Number* (e.g. TSS-001) type karein:\n\n`;
+                            matched.forEach(s => {
+                                msg += `• *${s.name || s.fullName}* — Roll No: *${s.rollNo || 'N/A'}* (${s.course || 'Course'})\n`;
+                            });
+                            msg += `\n👉 Apna Roll Number type karein.`;
+                            replyText = msg;
+                        } else {
+                            replyText = `❌ Koi student record nahi mila "*${text}*" par.\n\nKripya sahi *Student Name*, *Roll Number (e.g. TSS-001)* ya *Registered Phone Number* re-type karein.\n👉 Reply *0* for Main Menu.`;
+                        }
+
                     /* ── MAIN MENU bare number ── */
                     } else {
                         // Main menu number selection
@@ -992,6 +1105,24 @@ function initWhatsApp() {
                             replyText = await getAIResponse(text, chatHistory, conv);
                         }
                     }
+                }
+
+                /* ── FEE INQUIRY text context ── */
+                else if (menuCtx === 'fee_inquiry') {
+                    const matched = findStudentsByIdentifier(text, phone);
+                    if (matched.length === 1) {
+                        setCtx('main');
+                        replyText = formatStudentFeeRecord(matched[0]);
+                    } else if (matched.length > 1) {
+                        let msg = `🔍 *Multiple Students Found*\n━━━━━━━━━━━━━━━━━━━━━━━━━\nAap ke search keyword par 1 se zyada students mile hain. Kripya apna *Roll Number* (e.g. TSS-001) type karein:\n\n`;
+                        matched.forEach(s => {
+                            msg += `• *${s.name || s.fullName}* — Roll No: *${s.rollNo || 'N/A'}* (${s.course || 'Course'})\n`;
+                        });
+                        msg += `\n👉 Apna Roll Number type karein.`;
+                        replyText = msg;
+                    } else {
+                        replyText = `❌ Koi student record nahi mila "*${text}*" par.\n\nKripya sahi *Student Name*, *Roll Number (e.g. TSS-001)* ya *Registered Phone Number* re-type karein.\n👉 Reply *0* for Main Menu.`;
+                    }
 
                 // ── "back" keyword → go up one level ────────────────────────
                 } else if (lowerText === 'back') {
@@ -1014,7 +1145,7 @@ function initWhatsApp() {
                     } else if (menuCtx === 'contact') {
                         setCtx('main');
                         replyText = getMenu();
-                    } else if (menuCtx === 'fees') {
+                    } else if (menuCtx === 'fees' || menuCtx === 'fee_inquiry') {
                         setCtx('main');
                         replyText = getMenu();
                     } else if (['fees-ai', 'fees-career', 'fees-academic', 'fees-other'].includes(menuCtx)) {
@@ -1030,6 +1161,44 @@ function initWhatsApp() {
                     } else {
                         setCtx('main');
                         replyText = getMenu();
+                    }
+
+                // ── Student Fee Record / Payment Inquiry trigger ───────────
+                } else if (
+                    [
+                        'fee record', 'fees record', 'fee status', 'fees status', 'fee check', 'fees check',
+                        'fee detail', 'fees detail', 'fee report', 'fees report', 'my fee', 'check fee',
+                        'check my fee', 'fee receipt', 'fee slip', 'fee update', 'mera fee record',
+                        'fee bhar di', 'fees bhar di', 'fee submit', 'fees submit', 'fee pay', 'fees pay',
+                        'fee paid', 'fees paid', 'fee jama', 'fees jama', 'fee de di', 'fees de di',
+                        'fee bhardi', 'fees bhardi'
+                    ].some(kw => lowerText.includes(kw)) ||
+                    /^tss-\d+$/i.test(lowerText.trim()) ||
+                    /^stu-\d+$/i.test(lowerText.trim())
+                ) {
+                    const matched = findStudentsByIdentifier(text, phone);
+                    if (matched.length === 1) {
+                        setCtx('main');
+                        let recordMsg = formatStudentFeeRecord(matched[0]);
+                        if (
+                            lowerText.includes('bhar di') || lowerText.includes('submit') ||
+                            lowerText.includes('paid') || lowerText.includes('jama') ||
+                            lowerText.includes('pay') || lowerText.includes('de di')
+                        ) {
+                            recordMsg += `\n\n✅ *Payment Submission Received:* Aap ki fee payment update request note kar li gayi hai. Admin team verify kar ke receipt update kar degi! 📞`;
+                        }
+                        replyText = recordMsg;
+                    } else if (matched.length > 1) {
+                        setCtx('fee_inquiry');
+                        let msg = `🔍 *Multiple Students Found*\n━━━━━━━━━━━━━━━━━━━━━━━━━\nAap ke search keyword par 1 se zyada students mile hain. Kripya apna *Roll Number* (e.g. TSS-001) type karein:\n\n`;
+                        matched.forEach(s => {
+                            msg += `• *${s.name || s.fullName}* — Roll No: *${s.rollNo || 'N/A'}* (${s.course || 'Course'})\n`;
+                        });
+                        msg += `\n👉 Apna Roll Number type karein.`;
+                        replyText = msg;
+                    } else {
+                        setCtx('fee_inquiry');
+                        replyText = `💳 *Fee Status & Record Check — The Student Space*\n━━━━━━━━━━━━━━━━━━━━━━━━━\nAap ka fee record check karne ke liye, kripya niche di gayi details mein se koi **EK** bataein:\n\n👉 *Student Name* (e.g. Ali Khan)\n👉 *Roll Number / Student ID* (e.g. TSS-001)\n👉 *Registered Phone Number*\n👉 *Fee Slip / Receipt ID*\n\n_(Aap Name, Roll No ya Phone Number type karein)_`;
                     }
 
                 // ── enroll shortcut ─────────────────────────────────────────
