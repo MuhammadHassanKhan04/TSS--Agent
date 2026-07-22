@@ -999,3 +999,12 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
     console.log(`Express Backend Server running on port ${PORT}`);
 });
+
+// Guard process against unhandled errors and rejections from external Puppeteer instances
+process.on('uncaughtException', (err) => {
+    console.error('⚠️ Uncaught Exception caught:', err.message);
+});
+
+process.on('unhandledRejection', (reason) => {
+    console.error('⚠️ Unhandled Rejection caught:', reason ? (reason.message || reason) : reason);
+});

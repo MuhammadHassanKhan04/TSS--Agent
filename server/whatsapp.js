@@ -640,7 +640,11 @@ function parseIntent(text) {
 }
 
 // Start WhatsApp Client
-function initWhatsApp() {
+async function initWhatsApp() {
+    if (client) {
+        try { await client.destroy(); } catch (e) {}
+        client = null;
+    }
     connectionStatus = 'Connecting';
     qrCodeDataUri = null;
     broadcast('status', { status: connectionStatus, qr: qrCodeDataUri });
@@ -1309,7 +1313,14 @@ function initWhatsApp() {
         }
     });
 
-    client.initialize();
+    client.initialize().catch(async (initErr) => {
+        console.error("WhatsApp initialize error:", initErr.message);
+        connectionStatus = 'Disconnected';
+        broadcast('status', { status: connectionStatus, qr: null });
+        try { if (client) await client.destroy(); } catch (e) {}
+        client = null;
+        setTimeout(() => initWhatsApp(), 5000);
+    });
 }
 
 // Perform script execution for registration
