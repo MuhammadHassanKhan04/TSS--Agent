@@ -582,9 +582,20 @@ app.post('/api/whatsapp/send-fee-slip', async (req, res) => {
         }
 
         if (imgPath && fs.existsSync(imgPath)) {
-            // Send as image with caption
+            // Send as image with caption, with retry and graceful fallback
             const media = MessageMedia.fromFilePath(imgPath);
-            await client.sendMessage(formatted, media, { caption });
+            try {
+                await client.sendMessage(formatted, media, { caption });
+            } catch (sendErr) {
+                console.error('Primary fee slip media send error:', sendErr.message);
+                await new Promise(r => setTimeout(r, 800));
+                try {
+                    await client.sendMessage(formatted, media, { caption });
+                } catch (retryErr) {
+                    console.error('Fee slip media retry error, sending text fallback:', retryErr.message);
+                    await client.sendMessage(formatted, caption);
+                }
+            }
         } else {
             // Fallback: send text only
             await client.sendMessage(formatted, caption);

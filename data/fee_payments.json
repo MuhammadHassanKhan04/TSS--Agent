@@ -4,7 +4,7 @@
     "studentId": "STU-1783357606961",
     "month": "June 2026",
     "amount": "2000",
-    "status": "paid",
+    "status": "unpaid",
     "paidDate": "2026-07-06T17:08:56.188Z",
     "notes": "",
     "createdAt": "2026-07-06T17:08:44.001Z"
